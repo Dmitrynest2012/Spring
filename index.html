@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Сравнение анализов — маркеры</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>Сравнение анализов</h1>
+  <div id="common-matches" class="common-panel">
+    <strong>Совпадающие показатели:</strong>
+    <div id="matches-list"></div>
+  </div>
+</header>
+
+<main>
+
+  <div class="container">
+
+    <div class="column" data-column="1">
+      <div class="column-header">
+        <h2>Блок 1</h2>
+        <button class="btn-clear" data-clear="1">Очистить</button>
+      </div>
+      <div class="paste-zone" data-column="1">
+        <div class="placeholder">Вставьте сюда показатели (Ctrl+V)</div>
+      </div>
+      <div class="table-wrapper">
+        <table class="result-table" id="table1">
+          <thead>
+            <tr>
+              <th>Показатель</th>
+              <th>Значение</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="column" data-column="2">
+      <div class="column-header">
+        <h2>Блок 2</h2>
+        <button class="btn-clear" data-clear="2">Очистить</button>
+      </div>
+      <div class="paste-zone" data-column="2">
+        <div class="placeholder">Вставьте сюда показатели (Ctrl+V)</div>
+      </div>
+      <div class="table-wrapper">
+        <table class="result-table" id="table2">
+          <thead>
+            <tr>
+              <th>Показатель</th>
+              <th>Значение</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+</main>
+
+<script src="script.js"></script>
+</body>
+</html>
