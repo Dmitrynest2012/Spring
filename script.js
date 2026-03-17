@@ -1,6 +1,6 @@
 // Хранилища данных для каждого блока
 const data = {
-  1: new Map(), // Map<нормализованное_название, значение_как_строка>
+  1: new Map(), // Map<нормализованное_название_из_первого_столбца, значение_как_строка>
   2: new Map()
 };
 
@@ -23,7 +23,9 @@ function normalizeKey(key) {
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .replace(/[^а-яёa-z0-9\s()\-.,]/gi, '')
-    .replace(/ \(.*?\)/g, '');   // убираем часто повторяющиеся пояснения в скобках
+    .replace(/\s*\(.*?\)\s*/g, ' ')
+    .replace(/ в крови$/i, '')
+    .trim();
 }
 
 function normalizeValueForDisplay(val) {
@@ -55,9 +57,9 @@ function updateCommonMatches() {
   }
 
   common.forEach(item => {
-    const span = document.createElement('div');
-    span.innerHTML = `<strong>${item.key}</strong> = ${normalizeValueForDisplay(item.value)}`;
-    matchesList.appendChild(span);
+    const div = document.createElement('div');
+    div.innerHTML = `<strong>${item.key}</strong> = ${normalizeValueForDisplay(item.value)}`;
+    matchesList.appendChild(div);
   });
 }
 
@@ -65,7 +67,6 @@ function highlightMatches(column) {
   const tbody = tables[column];
   const other = column === 1 ? 2 : 1;
 
-  // Если противоположный блок пуст — снимаем всю подсветку
   if (data[other].size === 0) {
     tbody.querySelectorAll('tr.highlight').forEach(tr => tr.classList.remove('highlight'));
     return;
@@ -97,6 +98,7 @@ function renderTable(column) {
 
   for (const [normKey, value] of sorted) {
     const tr = document.createElement('tr');
+    // Показываем название так, как оно пришло из первого столбца (нормализованное)
     tr.innerHTML = `
       <td>${normKey}</td>
       <td>${normalizeValueForDisplay(value)}</td>
@@ -111,7 +113,6 @@ function renderTable(column) {
 function clearColumn(column) {
   data[column].clear();
   renderTable(column);
-  // обновляем подсветку второго блока
   const other = column === 1 ? 2 : 1;
   highlightMatches(other);
   updateCommonMatches();
@@ -120,54 +121,47 @@ function clearColumn(column) {
 function processPastedText(text, column) {
   const lines = text.split(/\r?\n/)
     .map(l => l.trim())
-    .filter(l => l.length > 0);
+    .filter(Boolean);  // убираем пустые строки
 
   let i = 0;
-  while (i < lines.length - 2) {
-    const line1 = lines[i];
-    const line2 = lines[i + 1];
-    const line3 = lines[i + 2];
+  while (i + 2 < lines.length) {
+    const potentialName    = lines[i];     // столбец 1 — берём отсюда название
+    const potentialLabName = lines[i + 1]; // столбец 2 — игнорируем полностью
+    const potentialValue   = lines[i + 2]; // столбец 3 — берём отсюда значение
 
-    // Проверяем типичный паттерн: две почти одинаковые строки → третья = значение
-    const name1 = line1;
-    const name2 = line2;
+    // Проверяем, похоже ли на начало показателя
+    if (
+      potentialName.length > 4 &&                          // разумная длина названия
+      !/^(optimal|high|higher|low|норм|реф|left|right)$/i.test(potentialName) &&
+      // значение выглядит как число / < > / короткий текст
+      (
+        /^[<≥>≤~-]?\s*\d+[.,]?\d*/.test(potentialValue) ||
+        potentialValue.length < 20 && (
+          potentialValue.includes('.') ||
+          potentialValue.includes(',') ||
+          potentialValue.includes('<') ||
+          potentialValue.includes('>') ||
+          /[0-9]/.test(potentialValue) ||
+          potentialValue.toLowerCase().includes('отриц') ||
+          potentialValue.toLowerCase().includes('следы')
+        )
+      )
+    ) {
+      const name = potentialName;
+      const value = potentialValue;
 
-    // Проверяем похожесть двух названий (игнорируем регистр и лишние пробелы)
-    const similarNames = 
-      name1.toLowerCase().replace(/\s+/g, ' ') === 
-      name2.toLowerCase().replace(/\s+/g, ' ') ||
-      name2.includes(name1) || name1.includes(name2);
+      const normKey = normalizeKey(name);
 
-    if (similarNames && line1.length > 4) {
-      // Пытаемся понять, является ли line3 значением
-      const potentialValue = line3;
-
-      // Значение обычно: число, <число, >число, иногда текст вроде "отриц."
-      const looksLikeValue = 
-        /^[<≥>≤~-]?\s*\d+[.,]?\d*/.test(potentialValue) ||  // 12, 3.4, <5, >12.1
-        potentialValue.toLowerCase().includes('отриц') ||
-        potentialValue.toLowerCase().includes('полож') ||
-        potentialValue.toLowerCase().includes('следы') ||
-        potentialValue.length < 12 && /[a-яёa-z]/.test(potentialValue); // короткие текстовые
-
-      if (looksLikeValue) {
-        // Берём название из первой строки (обычно более полное)
-        let chosenName = name1.trim();
-
-        const normKey = normalizeKey(chosenName);
-
-        if (normKey.length > 3 && !data[column].has(normKey)) {
-          data[column].set(normKey, potentialValue);
-        }
-
-        // Пропускаем минимум 3 строки (название1, название2, значение)
-        // + пытаемся перескочить остаток блока
-        i += 5;  // название1 + название2 + значение + min + max (+ grade)
-        continue;
+      if (normKey.length >= 4 && !data[column].has(normKey)) {
+        data[column].set(normKey, value);
       }
+
+      // Перепрыгиваем типичный блок (6 строк)
+      i += 6;
+      continue;
     }
 
-    // Если паттерн не найден — сдвигаемся на 1
+    // Если не подошло — идём дальше по одной строке
     i++;
   }
 
@@ -207,7 +201,6 @@ clearButtons.forEach(btn => {
 
 document.addEventListener('DOMContentLoaded', () => {
   pasteZones.forEach(z => z.setAttribute('tabindex', '0'));
-  // начальная отрисовка пустых таблиц
   renderTable(1);
   renderTable(2);
 });
