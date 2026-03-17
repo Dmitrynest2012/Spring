@@ -123,59 +123,52 @@ function processPastedText(text, column) {
     .filter(l => l.length > 0);
 
   let i = 0;
-  while (i < lines.length) {
-    let name = lines[i];
+  while (i < lines.length - 2) {
+    const line1 = lines[i];
+    const line2 = lines[i + 1];
+    const line3 = lines[i + 2];
 
-    // Пропускаем явный мусор / заголовки / оценки
-    if (
-      !name ||
-      name.length < 3 ||
-      /^(левая|правая|реф|референс|норма|grade|left|right|optimal|high|higher|low|повышен|понижен|возраст|пол|ед|ед\.|мкмоль|ммоль|г\/л|нг\/мл)$/i.test(name) ||
-      /^\d{1,3}$/.test(name) ||
-      name.includes('-----') ||
-      name.includes('====')
-    ) {
-      i++;
-      continue;
+    // Проверяем типичный паттерн: две почти одинаковые строки → третья = значение
+    const name1 = line1;
+    const name2 = line2;
+
+    // Проверяем похожесть двух названий (игнорируем регистр и лишние пробелы)
+    const similarNames = 
+      name1.toLowerCase().replace(/\s+/g, ' ') === 
+      name2.toLowerCase().replace(/\s+/g, ' ') ||
+      name2.includes(name1) || name1.includes(name2);
+
+    if (similarNames && line1.length > 4) {
+      // Пытаемся понять, является ли line3 значением
+      const potentialValue = line3;
+
+      // Значение обычно: число, <число, >число, иногда текст вроде "отриц."
+      const looksLikeValue = 
+        /^[<≥>≤~-]?\s*\d+[.,]?\d*/.test(potentialValue) ||  // 12, 3.4, <5, >12.1
+        potentialValue.toLowerCase().includes('отриц') ||
+        potentialValue.toLowerCase().includes('полож') ||
+        potentialValue.toLowerCase().includes('следы') ||
+        potentialValue.length < 12 && /[a-яёa-z]/.test(potentialValue); // короткие текстовые
+
+      if (looksLikeValue) {
+        // Берём название из первой строки (обычно более полное)
+        let chosenName = name1.trim();
+
+        const normKey = normalizeKey(chosenName);
+
+        if (normKey.length > 3 && !data[column].has(normKey)) {
+          data[column].set(normKey, potentialValue);
+        }
+
+        // Пропускаем минимум 3 строки (название1, название2, значение)
+        // + пытаемся перескочить остаток блока
+        i += 5;  // название1 + название2 + значение + min + max (+ grade)
+        continue;
+      }
     }
 
+    // Если паттерн не найден — сдвигаемся на 1
     i++;
-
-    // Пропускаем повтор названия или короткие строки
-    while (i < lines.length && (
-      lines[i] === name ||
-      lines[i].length < 3 ||
-      lines[i].startsWith('(') ||
-      lines[i].match(/^\d+\s*[a-zа-я]?$/i)
-    )) {
-      i++;
-    }
-
-    if (i >= lines.length) break;
-
-    let value = lines[i];
-
-    // Если выглядит как оценка / статус — это не значение → пропускаем блок
-    if (
-      /^(optimal|high|higher|low|норм|реф|повышен|понижен|следы|не опред|отриц|полож)$/i.test(value) ||
-      value.length < 1 ||
-      value.match(/^\s*[<>]?\s*\d+(\.\d+)?\s*$/) === null &&
-      !value.match(/^[<>]?\s*-?\d+(\.\d+)?/) &&
-      !value.match(/^\d+(\.\d+)?/) &&
-      !value.includes('.') && !value.includes(',')
-    ) {
-      i++;
-      continue;
-    }
-
-    const normKey = normalizeKey(name);
-
-    if (normKey && normKey.length > 3 && !data[column].has(normKey)) {
-      data[column].set(normKey, value);
-    }
-
-    // Пропускаем остаток предполагаемого блока (обычно 3–6 строк)
-    i += 3;   // значение взяли → минимум left, right, grade
   }
 
   renderTable(column);
