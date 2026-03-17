@@ -22,53 +22,54 @@ function normalizeKey(key) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, ' ')
-    .replace(/[^а-яёa-z0-9\s()\-.,]/gi, ''); // убираем странные символы, оставляем осмысленное
+    .replace(/[^а-яёa-z0-9\s()\-.,]/gi, '')
+    .replace(/ \(.*?\)/g, '');   // убираем часто повторяющиеся пояснения в скобках
 }
 
 function normalizeValueForDisplay(val) {
-  return val.trim(); // можно добавить дополнительные замены, если нужно
+  return val.trim();
 }
 
-function valuesAreEqual(valA, valB) {
-  // Сравниваем строки после приведения к одному виду
-  const a = valA.trim().replace(/\s+/g, ' ');
-  const b = valB.trim().replace(/\s+/g, ' ');
-  return a === b;
+function valuesAreEqual(a, b) {
+  if (!a || !b) return false;
+  const normA = a.trim().replace(/\s+/g, ' ');
+  const normB = b.trim().replace(/\s+/g, ' ');
+  return normA === normB;
 }
 
 function updateCommonMatches() {
   const common = [];
 
   for (const [key, val1] of data[1]) {
-    if (data[2].has(key)) {
-      const val2 = data[2].get(key);
-      if (valuesAreEqual(val1, val2)) {
-        common.push({ key, value: val1 });
-      }
+    if (data[2].has(key) && valuesAreEqual(val1, data[2].get(key))) {
+      common.push({ key, value: val1 });
     }
   }
 
-  // Сортируем по названию
-  common.sort((a, b) => a.key.localeCompare(b.key, 'ru'));
+  common.sort((a, b) => a.key.localeCompare(b.key, 'ru-RU'));
 
   matchesList.innerHTML = '';
   if (common.length === 0) {
-    matchesList.textContent = '';
+    matchesList.innerHTML = '<em>— пока нет совпадений —</em>';
     return;
   }
 
-  const fragments = common.map(item => {
-    const span = document.createElement('span');
+  common.forEach(item => {
+    const span = document.createElement('div');
     span.innerHTML = `<strong>${item.key}</strong> = ${normalizeValueForDisplay(item.value)}`;
-    return span;
+    matchesList.appendChild(span);
   });
-
-  matchesList.append(...fragments);
 }
 
 function highlightMatches(column) {
   const tbody = tables[column];
   const other = column === 1 ? 2 : 1;
+
+  // Если противоположный блок пуст — снимаем всю подсветку
+  if (data[other].size === 0) {
+    tbody.querySelectorAll('tr.highlight').forEach(tr => tr.classList.remove('highlight'));
+    return;
+  }
 
   tbody.querySelectorAll('tr').forEach(tr => {
     const keyCell = tr.cells[0];
@@ -77,12 +78,11 @@ function highlightMatches(column) {
     const key = normalizeKey(keyCell.textContent);
     tr.classList.remove('highlight');
 
-    if (data[other].has(key)) {
-      const valThis = data[column].get(key);
-      const valOther = data[other].get(key);
-      if (valuesAreEqual(valThis, valOther)) {
-        tr.classList.add('highlight');
-      }
+    if (data[other].has(key) && valuesAreEqual(
+      data[column].get(key),
+      data[other].get(key)
+    )) {
+      tr.classList.add('highlight');
     }
   });
 }
@@ -91,19 +91,14 @@ function renderTable(column) {
   const tbody = tables[column];
   tbody.innerHTML = '';
 
-  // Сортируем по названию показателя
   const sorted = [...data[column].entries()].sort((a, b) =>
-    a[0].localeCompare(b[0], 'ru')
+    a[0].localeCompare(b[0], 'ru-RU')
   );
 
   for (const [normKey, value] of sorted) {
-    // В таблице показываем оригинальное название (берём первое вхождение или можно хранить отдельно)
-    // Здесь для простоты используем normKey как отображаемое (можно улучшить)
-    const displayName = normKey; // ← можно хранить оригинальное название отдельно, если важно
-
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${displayName}</td>
+      <td>${normKey}</td>
       <td>${normalizeValueForDisplay(value)}</td>
     `;
     tbody.appendChild(tr);
@@ -116,6 +111,7 @@ function renderTable(column) {
 function clearColumn(column) {
   data[column].clear();
   renderTable(column);
+  // обновляем подсветку второго блока
   const other = column === 1 ? 2 : 1;
   highlightMatches(other);
   updateCommonMatches();
@@ -124,41 +120,62 @@ function clearColumn(column) {
 function processPastedText(text, column) {
   const lines = text.split(/\r?\n/)
     .map(l => l.trim())
-    .filter(l => l !== '');
+    .filter(l => l.length > 0);
 
   let i = 0;
-  while (i + 5 < lines.length) {           // минимум 6 строк на показатель
-    const name1 = lines[i];
-    // const name2 = lines[i + 1];         // игнорируем вторую строку (лаб-нейм)
-    const valueStr = lines[i + 2];
+  while (i < lines.length) {
+    let name = lines[i];
 
-    // Пропускаем, если значение выглядит как заголовок/мусор
-    if (/^(левая|правая|реф|норма|grade|left|right|optimal|high|higher|низкий|повышен)$/i.test(valueStr)) {
-      i += 1;
+    // Пропускаем явный мусор / заголовки / оценки
+    if (
+      !name ||
+      name.length < 3 ||
+      /^(левая|правая|реф|референс|норма|grade|left|right|optimal|high|higher|low|повышен|понижен|возраст|пол|ед|ед\.|мкмоль|ммоль|г\/л|нг\/мл)$/i.test(name) ||
+      /^\d{1,3}$/.test(name) ||
+      name.includes('-----') ||
+      name.includes('====')
+    ) {
+      i++;
       continue;
     }
 
-    // Значение оставляем как есть — строка
-    const value = valueStr;
+    i++;
 
-    // Берём название из первой строки
-    let displayName = name1.trim();
+    // Пропускаем повтор названия или короткие строки
+    while (i < lines.length && (
+      lines[i] === name ||
+      lines[i].length < 3 ||
+      lines[i].startsWith('(') ||
+      lines[i].match(/^\d+\s*[a-zа-я]?$/i)
+    )) {
+      i++;
+    }
 
-    // Защита от совсем пустых/мусорных названий
-    if (displayName.length < 2 || /^\d/.test(displayName)) {
-      i += 1;
+    if (i >= lines.length) break;
+
+    let value = lines[i];
+
+    // Если выглядит как оценка / статус — это не значение → пропускаем блок
+    if (
+      /^(optimal|high|higher|low|норм|реф|повышен|понижен|следы|не опред|отриц|полож)$/i.test(value) ||
+      value.length < 1 ||
+      value.match(/^\s*[<>]?\s*\d+(\.\d+)?\s*$/) === null &&
+      !value.match(/^[<>]?\s*-?\d+(\.\d+)?/) &&
+      !value.match(/^\d+(\.\d+)?/) &&
+      !value.includes('.') && !value.includes(',')
+    ) {
+      i++;
       continue;
     }
 
-    const normKey = normalizeKey(displayName);
+    const normKey = normalizeKey(name);
 
-    // Добавляем только если такого показателя ещё нет
-    if (!data[column].has(normKey)) {
+    if (normKey && normKey.length > 3 && !data[column].has(normKey)) {
       data[column].set(normKey, value);
     }
 
-    // Переходим к следующему блоку (6 строк)
-    i += 6;
+    // Пропускаем остаток предполагаемого блока (обычно 3–6 строк)
+    i += 3;   // значение взяли → минимум left, right, grade
   }
 
   renderTable(column);
@@ -179,7 +196,6 @@ pasteZones.forEach(zone => {
     }
   });
 
-  // Подсветка зоны при фокусе
   zone.addEventListener('focusin', () => zone.classList.add('active'));
   zone.addEventListener('focusout', () => zone.classList.remove('active'));
 
@@ -196,7 +212,9 @@ clearButtons.forEach(btn => {
   });
 });
 
-// Инициализация
 document.addEventListener('DOMContentLoaded', () => {
   pasteZones.forEach(z => z.setAttribute('tabindex', '0'));
+  // начальная отрисовка пустых таблиц
+  renderTable(1);
+  renderTable(2);
 });
