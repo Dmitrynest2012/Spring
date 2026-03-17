@@ -1,6 +1,6 @@
 // Хранилища данных для каждого блока
 const data = {
-  1: new Map(), // Map<нормализованное_название_из_первого_столбца, значение_как_строка>
+  1: new Map(), // Map<нормализованное название из 1-го столбца, значение как строка из 3-го столбца>
   2: new Map()
 };
 
@@ -18,6 +18,7 @@ const matchesList = document.getElementById('matches-list');
 // ────────────────────────────────────────────────
 
 function normalizeKey(key) {
+  if (!key) return '';
   return key
     .trim()
     .toLowerCase()
@@ -25,17 +26,18 @@ function normalizeKey(key) {
     .replace(/[^а-яёa-z0-9\s()\-.,]/gi, '')
     .replace(/\s*\(.*?\)\s*/g, ' ')
     .replace(/ в крови$/i, '')
+    .replace(/ \(.*$/i, '')
     .trim();
 }
 
 function normalizeValueForDisplay(val) {
-  return val.trim();
+  return (val || '').trim();
 }
 
 function valuesAreEqual(a, b) {
   if (!a || !b) return false;
-  const normA = a.trim().replace(/\s+/g, ' ');
-  const normB = b.trim().replace(/\s+/g, ' ');
+  const normA = normalizeValueForDisplay(a);
+  const normB = normalizeValueForDisplay(b);
   return normA === normB;
 }
 
@@ -67,8 +69,9 @@ function highlightMatches(column) {
   const tbody = tables[column];
   const other = column === 1 ? 2 : 1;
 
+  // Если второй блок пуст — никакой подсветки
   if (data[other].size === 0) {
-    tbody.querySelectorAll('tr.highlight').forEach(tr => tr.classList.remove('highlight'));
+    tbody.querySelectorAll('tr').forEach(tr => tr.classList.remove('highlight'));
     return;
   }
 
@@ -79,11 +82,12 @@ function highlightMatches(column) {
     const key = normalizeKey(keyCell.textContent);
     tr.classList.remove('highlight');
 
-    if (data[other].has(key) && valuesAreEqual(
-      data[column].get(key),
-      data[other].get(key)
-    )) {
-      tr.classList.add('highlight');
+    if (data[other].has(key)) {
+      const valThis  = data[column].get(key);
+      const valOther = data[other].get(key);
+      if (valuesAreEqual(valThis, valOther)) {
+        tr.classList.add('highlight');
+      }
     }
   });
 }
@@ -98,7 +102,6 @@ function renderTable(column) {
 
   for (const [normKey, value] of sorted) {
     const tr = document.createElement('tr');
-    // Показываем название так, как оно пришло из первого столбца (нормализованное)
     tr.innerHTML = `
       <td>${normKey}</td>
       <td>${normalizeValueForDisplay(value)}</td>
@@ -121,34 +124,40 @@ function clearColumn(column) {
 function processPastedText(text, column) {
   const lines = text.split(/\r?\n/)
     .map(l => l.trim())
-    .filter(Boolean);  // убираем пустые строки
+    .filter(l => l.length > 0);
 
   let i = 0;
-  while (i + 2 < lines.length) {
-    const potentialName    = lines[i];     // столбец 1 — берём отсюда название
-    const potentialLabName = lines[i + 1]; // столбец 2 — игнорируем полностью
-    const potentialValue   = lines[i + 2]; // столбец 3 — берём отсюда значение
+  while (i < lines.length - 2) {
+    const s1 = lines[i];           // предполагаемое название (столбец 1)
+    const s2 = lines[i + 1];       // лабораторное имя (столбец 2)
+    const s3 = lines[i + 2];       // значение (столбец 3)
 
-    // Проверяем, похоже ли на начало показателя
-    if (
-      potentialName.length > 4 &&                          // разумная длина названия
-      !/^(optimal|high|higher|low|норм|реф|left|right)$/i.test(potentialName) &&
-      // значение выглядит как число / < > / короткий текст
+    // Критерий «пара названий»: s2 содержит s1 или наоборот, или они почти равны после очистки
+    const clean1 = s1.toLowerCase().replace(/\s+/g, ' ').trim();
+    const clean2 = s2.toLowerCase().replace(/\s+/g, ' ').trim();
+
+    const isNamePair =
+      (clean1.length > 4 && clean2.length > 4) &&
+      (clean2.includes(clean1) || clean1.includes(clean2) ||
+       clean1.replace(/[^а-яёa-z0-9 ]/gi, '') === clean2.replace(/[^а-яёa-z0-9 ]/gi, ''));
+
+    // Значение должно выглядеть как число/диапазон/текст-результат, но НЕ как оценка
+    const isLikelyValue =
+      s3.length > 0 &&
+      s3.length < 30 &&
+      !/^(optimal|high|higher|low|lower|critical|повышен|понижен|норм|реф|grade)$/i.test(s3.trim()) &&
       (
-        /^[<≥>≤~-]?\s*\d+[.,]?\d*/.test(potentialValue) ||
-        potentialValue.length < 20 && (
-          potentialValue.includes('.') ||
-          potentialValue.includes(',') ||
-          potentialValue.includes('<') ||
-          potentialValue.includes('>') ||
-          /[0-9]/.test(potentialValue) ||
-          potentialValue.toLowerCase().includes('отриц') ||
-          potentialValue.toLowerCase().includes('следы')
-        )
-      )
-    ) {
-      const name = potentialName;
-      const value = potentialValue;
+        /^[<≥>≤~]?\s*-?\d+[.,]?\d*/.test(s3) ||
+        s3.includes('<') || s3.includes('>') ||
+        s3.toLowerCase().includes('отриц') ||
+        s3.toLowerCase().includes('следы') ||
+        (s3.length < 15 && /[0-9.,]/.test(s3))
+      );
+
+    if (isNamePair && isLikelyValue) {
+      // Берём название из первой строки (обычно более «красивое»)
+      const name = s1;
+      const value = s3;
 
       const normKey = normalizeKey(name);
 
@@ -156,13 +165,13 @@ function processPastedText(text, column) {
         data[column].set(normKey, value);
       }
 
-      // Перепрыгиваем типичный блок (6 строк)
+      // Прыгаем далеко вперёд — типичный блок 6 строк
       i += 6;
       continue;
     }
 
-    // Если не подошло — идём дальше по одной строке
-    i++;
+    // Если не нашлось — сдвигаемся минимально, чтобы поймать сдвинутые блоки
+    i += 1;
   }
 
   renderTable(column);
