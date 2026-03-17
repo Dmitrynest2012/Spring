@@ -1,6 +1,6 @@
 // Хранилища данных для каждого блока
 const data = {
-  1: new Map(), // Map<название показателя, значение>
+  1: new Map(), // Map<нормализованное_название, значение_как_строка>
   2: new Map()
 };
 
@@ -18,31 +18,52 @@ const matchesList = document.getElementById('matches-list');
 // ────────────────────────────────────────────────
 
 function normalizeKey(key) {
-  return key.trim().toLowerCase().replace(/\s+/g, ' ');
+  return key
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[^а-яёa-z0-9\s()\-.,]/gi, ''); // убираем странные символы, оставляем осмысленное
+}
+
+function normalizeValueForDisplay(val) {
+  return val.trim(); // можно добавить дополнительные замены, если нужно
+}
+
+function valuesAreEqual(valA, valB) {
+  // Сравниваем строки после приведения к одному виду
+  const a = valA.trim().replace(/\s+/g, ' ');
+  const b = valB.trim().replace(/\s+/g, ' ');
+  return a === b;
 }
 
 function updateCommonMatches() {
   const common = [];
 
-  for (const [key1, val1] of data[1]) {
-    if (data[2].has(key1) && data[2].get(key1) === val1) {
-      common.push({ key: key1, value: val1 });
+  for (const [key, val1] of data[1]) {
+    if (data[2].has(key)) {
+      const val2 = data[2].get(key);
+      if (valuesAreEqual(val1, val2)) {
+        common.push({ key, value: val1 });
+      }
     }
   }
 
-  // Сортируем для красоты (по названию)
+  // Сортируем по названию
   common.sort((a, b) => a.key.localeCompare(b.key, 'ru'));
 
   matchesList.innerHTML = '';
-  if (common.length === 0) return;
+  if (common.length === 0) {
+    matchesList.textContent = '';
+    return;
+  }
 
-  const items = common.map(item => {
+  const fragments = common.map(item => {
     const span = document.createElement('span');
-    span.innerHTML = `<strong>${item.key}</strong> = ${item.value}`;
+    span.innerHTML = `<strong>${item.key}</strong> = ${normalizeValueForDisplay(item.value)}`;
     return span;
   });
 
-  matchesList.append(...items);
+  matchesList.append(...fragments);
 }
 
 function highlightMatches(column) {
@@ -56,8 +77,12 @@ function highlightMatches(column) {
     const key = normalizeKey(keyCell.textContent);
     tr.classList.remove('highlight');
 
-    if (data[other].has(key) && data[other].get(key) === data[column].get(key)) {
-      tr.classList.add('highlight');
+    if (data[other].has(key)) {
+      const valThis = data[column].get(key);
+      const valOther = data[other].get(key);
+      if (valuesAreEqual(valThis, valOther)) {
+        tr.classList.add('highlight');
+      }
     }
   });
 }
@@ -67,13 +92,19 @@ function renderTable(column) {
   tbody.innerHTML = '';
 
   // Сортируем по названию показателя
-  const sorted = [...data[column].entries()].sort((a,b) => a[0].localeCompare(b[0], 'ru'));
+  const sorted = [...data[column].entries()].sort((a, b) =>
+    a[0].localeCompare(b[0], 'ru')
+  );
 
-  for (const [key, value] of sorted) {
+  for (const [normKey, value] of sorted) {
+    // В таблице показываем оригинальное название (берём первое вхождение или можно хранить отдельно)
+    // Здесь для простоты используем normKey как отображаемое (можно улучшить)
+    const displayName = normKey; // ← можно хранить оригинальное название отдельно, если важно
+
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${key}</td>
-      <td>${value}</td>
+      <td>${displayName}</td>
+      <td>${normalizeValueForDisplay(value)}</td>
     `;
     tbody.appendChild(tr);
   }
@@ -85,7 +116,6 @@ function renderTable(column) {
 function clearColumn(column) {
   data[column].clear();
   renderTable(column);
-  // второй блок тоже обновляем подсветку
   const other = column === 1 ? 2 : 1;
   highlightMatches(other);
   updateCommonMatches();
@@ -94,44 +124,40 @@ function clearColumn(column) {
 function processPastedText(text, column) {
   const lines = text.split(/\r?\n/)
     .map(l => l.trim())
-    .filter(l => l !== '');  // убираем пустые строки
+    .filter(l => l !== '');
 
   let i = 0;
-  while (i < lines.length) {
-    // Минимально нужно 6 строк на блок (название + повтор + значение + 3 колонки)
-    if (i + 5 >= lines.length) break;
-
+  while (i + 5 < lines.length) {           // минимум 6 строк на показатель
     const name1 = lines[i];
-    const name2 = lines[i + 1];
+    // const name2 = lines[i + 1];         // игнорируем вторую строку (лаб-нейм)
     const valueStr = lines[i + 2];
 
-    // Проверяем, что третья строка — похоже на число (с точкой или запятой)
-    const valueClean = valueStr.replace(',', '.');
-    if (!/^-?\d+(\.\d+)?$/.test(valueClean)) {
-      // если не число — пропускаем весь блок или пытаемся сдвинуться
-      i++;
+    // Пропускаем, если значение выглядит как заголовок/мусор
+    if (/^(левая|правая|реф|норма|grade|left|right|optimal|high|higher|низкий|повышен)$/i.test(valueStr)) {
+      i += 1;
       continue;
     }
 
-    // Берём название из ПЕРВОЙ строки (можно потом нормализовать)
+    // Значение оставляем как есть — строка
+    const value = valueStr;
+
+    // Берём название из первой строки
     let displayName = name1.trim();
 
-    // Если первая строка пустая/короткая — берём вторую (редкий случай)
-    if (displayName.length < 2 && name2.length > 2) {
-      displayName = name2.trim();
+    // Защита от совсем пустых/мусорных названий
+    if (displayName.length < 2 || /^\d/.test(displayName)) {
+      i += 1;
+      continue;
     }
 
-    const value = valueClean;
-
-    // Нормализуем ключ для проверки дубликатов (регистр и лишние пробелы не важны)
     const normKey = normalizeKey(displayName);
 
-    // Добавляем, только если такого показателя ещё нет в этом блоке
+    // Добавляем только если такого показателя ещё нет
     if (!data[column].has(normKey)) {
       data[column].set(normKey, value);
     }
 
-    // Пропускаем 6 строк (1 блок)
+    // Переходим к следующему блоку (6 строк)
     i += 6;
   }
 
@@ -148,14 +174,16 @@ pasteZones.forEach(zone => {
   zone.addEventListener('paste', e => {
     e.preventDefault();
     const text = (e.clipboardData || window.clipboardData).getData('text');
-    processPastedText(text, col);
+    if (text.trim()) {
+      processPastedText(text, col);
+    }
   });
 
-  // Подсветка при фокусе
+  // Подсветка зоны при фокусе
   zone.addEventListener('focusin', () => zone.classList.add('active'));
   zone.addEventListener('focusout', () => zone.classList.remove('active'));
 
-  // Можно также сделать клик → фокус
+  zone.setAttribute('tabindex', '0');
   zone.addEventListener('click', () => zone.focus());
 });
 
@@ -168,7 +196,7 @@ clearButtons.forEach(btn => {
   });
 });
 
-// Чтобы можно было сразу вставить при загрузке страницы
+// Инициализация
 document.addEventListener('DOMContentLoaded', () => {
   pasteZones.forEach(z => z.setAttribute('tabindex', '0'));
 });
